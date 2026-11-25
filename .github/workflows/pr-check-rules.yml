@@ -1,16 +1,21 @@
-name: review
+name: "PR: check rules"
 
 on:
   pull_request:
-    branches: [staging, main]
+    branches: [staging]
     types: [opened, synchronize, reopened, ready_for_review, review_requested]
 
 permissions:
   contents: read
   pull-requests: read
 
+# Un push nuevo a la misma pull request cancela la comprobación anterior
+concurrency:
+  group: pr-check-rules-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  review:
+  check-rules:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
@@ -20,8 +25,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '22'
-      - run: node --test tests/*.mjs tests/discord-pr-notifications/*.test.mjs
-      - run: bash tests/scripts.test.sh
       - name: Comprobar la pull request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -34,6 +37,8 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_ASSIGNEE: ${{ github.event.pull_request.assignee != null && github.event.pull_request.assignee.login || '' }}
+          # En un fork nadie sin permiso de escritura puede asignar: la regla de la persona asignada no aplica
+          PR_FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: node .github/scripts/review-pull-request.mjs
       # El emisor de Discord solo ve este número si la comprobación ha pasado y la base es staging.
       - name: Save PR number for Discord

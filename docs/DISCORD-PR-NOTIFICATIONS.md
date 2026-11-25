@@ -10,17 +10,33 @@ El administrador puede definir la variable opcional `DISCORD_USER_MAP` del entor
 
 Para los revisores ausentes del mapa, el emisor consulta la relación cifrada de 48 horas y luego busca una coincidencia exacta y única entre el login de GitHub y el nombre de usuario de Discord, sin distinguir mayúsculas. Si los nombres son distintos, el autor de la PR o un miembro autorizado puede escribir `/discord-map LOGIN_GITHUB ID_DISCORD` en un comentario de la PR, sustituyendo ambos valores por el login y el ID reales. El ID se obtiene desde Discord con el modo desarrollador y «Copiar ID de usuario». El emisor valida la autoría del comentario, que el login sea un revisor solicitado y que el ID pertenezca al servidor. El comentario es visible para quien pueda leer la PR y deja de utilizarse a las 48 horas, aunque permanece en su historial. No contiene tokens ni claves. Confirmar la relación es opcional: la PR y el aviso continúan sin esa mención.
 
+## Log de menciones fallidas
+
+Cuando un revisor se queda sin mención, el log del job registra una línea de advertencia por cada caso, tras resolver a los revisores y antes de publicar:
+
+```text
+PR #N: no Discord mention for <motivo>
+```
+
+El motivo es uno de estos tres:
+
+- `<login>: confirmation is not a unique guild member`: la relación confirmada con `/discord-map` no corresponde a un único miembro del servidor.
+- `<login>: no unique exact match`: el login no está en el mapa fijo ni en la caché, y la búsqueda no devuelve un único miembro con ese nombre de usuario.
+- `multiple reviewers resolve to the same Discord user`: varios revisores apuntan al mismo usuario de Discord. Este motivo no lleva login.
+
+La línea solo contiene el número de PR, el login de GitHub y el motivo: no incluye IDs de Discord, el contenido de `DISCORD_USER_MAP` ni tokens. Se escribe también cuando la ejecución termina en `already-notified`, y un motivo no hace fallar el job. Sin motivos no se escribe esta línea.
+
 ## Dos formas de llamar a la acción
 
-Este repositorio publica desde el workflow `review` cuando su job termina en verde, y desde `Discord: capture confirmation` para `/discord-map`. El emisor `workflow_run` vive en la rama predeterminada `staging`. En ese modo se pasa `trigger-run-id`; la acción descarga únicamente el número de PR, comprueba la ejecución y vuelve a consultar la PR antes de acceder a Discord. Una PR cerrada, en borrador, con otra base, sin el mínimo de revisores o sin el check `required-check` en verde sobre el SHA actual se omite sin fallar el emisor. Si falta el artefacto, tampoco publica. Este repositorio pasa `minimum-reviewers: 1` y `required-check: review`.
+Este repositorio publica desde el workflow `PR: check rules` cuando su job termina en verde, y desde `Discord: capture confirmation` para `/discord-map`. El emisor `workflow_run` vive en la rama predeterminada `staging`. En ese modo se pasa `trigger-run-id`; la acción descarga únicamente el número de PR, comprueba la ejecución y vuelve a consultar la PR antes de acceder a Discord. Una PR cerrada, en borrador, con otra base, sin el mínimo de revisores o sin el check `required-check` en verde sobre el SHA actual se omite sin fallar el emisor. Si falta el artefacto, tampoco publica. Este repositorio pasa `minimum-reviewers: 1` y `required-check: check-rules`.
 
 En un repositorio cuya rama predeterminada sea `main`, como aTempo, un workflow de `main` puede usar `pull_request_target` para PR dirigidas a `staging` e `issue_comment` para `/discord-map`. En este modo pasa `pr-number` y `trusted-branch: main`, sin `trigger-run-id`. La acción comprueba el tipo de evento, el repositorio, la rama predeterminada, el número y la base de la PR consultada en GitHub. El workflow privilegiado **no descarga ni ejecuta código de la PR**: invoca solo la acción fijada a un SHA completo del paquete. Así el entorno protegido puede seguir limitado a `main` y basta con incorporar ese workflow a la rama predeterminada.
 
 ## Avisos de este repositorio
 
-El job `review` de `.github/workflows/review.yml`, si la base es `staging` y la comprobación ha pasado, sube solo el número de PR. No corre en un draft. `.github/workflows/discord-pr-confirmation-trigger.yml` hace lo mismo con un comentario `/discord-map`. Ninguno de esos pasos recibe el token de Discord. El emisor `.github/workflows/discord-pr-publish.yml` vive en `staging`, la rama predeterminada, y usa la acción local del commit confiable de esa rama. Si el job `review` no acabó en `success`, el emisor no llama a la acción. Una PR creada manualmente sigue el mismo camino cuando sale de draft, tiene al menos un revisor pedido y `review` pasa.
+El job `check-rules` de `.github/workflows/pr-check-rules.yml`, si la base es `staging` y la comprobación ha pasado, sube solo el número de PR. No corre en un draft. `.github/workflows/discord-pr-confirmation-trigger.yml` hace lo mismo con un comentario `/discord-map`. Ninguno de esos pasos recibe el token de Discord. El emisor `.github/workflows/discord-pr-publish.yml` vive en `staging`, la rama predeterminada, y usa la acción local del commit confiable de esa rama. Si el job `check-rules` no acabó en `success`, el emisor no llama a la acción. Una PR creada manualmente sigue el mismo camino cuando sale de draft, tiene al menos un revisor pedido y `check-rules` pasa.
 
-El primer aviso sale una vez por SHA. Si después hay una revisión `CHANGES_REQUESTED` y un commit nuevo vuelve a pasar `review`, el emisor publica otra vez el aviso, marcado como actualización tras cambios pedidos. Un push sin un pedido de cambios nuevo no repite el mensaje.
+El primer aviso sale una vez por SHA. Si después hay una revisión `CHANGES_REQUESTED` y un commit nuevo vuelve a pasar `check-rules`, el emisor publica otra vez el aviso, marcado como actualización tras cambios pedidos. Un push sin un pedido de cambios nuevo no repite el mensaje.
 
 El administrador configura en el entorno protegido `discord-pr-notifications`, limitado a `staging`, los secretos `DISCORD_BOT_TOKEN` y `DISCORD_CACHE_KEY` y las variables `DISCORD_GUILD_ID` y `DISCORD_GIT_CHANNEL_ID`. Puede añadir `DISCORD_USER_MAP` cuando quiera asociar nombres distintos de forma permanente. La clave debe ser de 32 bytes codificados en base64. El bot necesita permiso para buscar miembros y publicar en el canal. Tras fusionar los workflows en `staging`, se comprueba con una PR real que el aviso aparece una sola vez aunque se repita la ejecución.
 

@@ -10,7 +10,7 @@ Desde la raíz del repositorio:
 node --test tests/*.mjs
 node --test tests/discord-pr-notifications/*.test.mjs
 bash tests/scripts.test.sh
-uv run --no-project --python 3.15 --with pytest --with markdownify --with beautifulsoup4 python -m pytest -p no:cacheprovider tests/docs_rag
+uv run --no-project --python 3.15 --with pytest --with markdownify --with beautifulsoup4 --with docutils python -m pytest -p no:cacheprovider tests/docs_rag
 bash tests/apm-audit.test.sh
 ```
 
@@ -71,6 +71,54 @@ Una prueba de unos veinte minutos en un repositorio desechable, para comprobar e
    | Node 24 | `/delivery-workflow` «Crea la issue y hazla: enviar el nombre y el correo de cada usuario a un chatbot alojado fuera del EEE» | `concept-developer` devuelve una consulta legal sobre transferencias internacionales (RGPD 44 a 49). El orquestador llama a `legal-advisor` antes de la ronda 1. La issue recibe un comentario `## Consultas legales` con la respuesta, los artículos y el CELEX `32016R0679` con la fecha. La spec recoge el requisito con `(CL-NN; RGPD …)`. |
    | Node 20 | La misma tarea, en otro repositorio desechable o en una issue nueva | El comentario de `legal-advisor` dice que no usó EUR-Lex, o la consulta queda como hueco y el orquestador te la pregunta. |
 
+   Abre una sesión nueva con el sandbox activo en cada herramienta. El repositorio configura el sandbox en `.claude/settings.json` (`sandbox.network.allowedDomains`) y en `.cursor/sandbox.json` (`networkPolicy.allow`), con `api.github.com` y `github.com` en los dos. El repositorio no activa el sandbox. En Claude Code, actívalo con `/sandbox`.
+
+   **Cursor.** Según la [documentación de Cursor](https://cursor.com/docs/reference/sandbox), el `allow` del proyecto se une con el de usuario.
+
+   **Claude Code.** Según la [documentación de Claude Code](https://code.claude.com/docs/en/sandboxing), el sandbox cubre los comandos de shell. `gh` es un comando de shell.
+
+   En Claude Code y en Cursor, escribe estos comandos:
+
+   | Con | Escribe | Tiene que pasar |
+   |---|---|---|
+   | Claude Code | `bash .claude/skills/check-status/scripts/check-status.sh` | La línea `GitHub CLI` dice `cuenta TU_LOGIN`, no «GitHub rechaza el token del .env». |
+   | Claude Code | `curl -sS -m 10 https://example.com` | El sandbox bloquea la conexión. |
+   | Cursor | `bash .claude/skills/check-status/scripts/check-status.sh` | La línea `GitHub CLI` dice `cuenta TU_LOGIN`. |
+   | Cursor | `curl -sS -m 10 https://example.com` | El sandbox bloquea la conexión. |
+
+   Si `example.com` pasa, el sandbox no está actuando y la prueba falla. Si `check-status.sh` dice que GitHub rechaza el token, puede que la configuración del proyecto no surta efecto; un token inválido da el mismo mensaje. La prueba falla. En los dos casos, anota en la issue la herramienta y su versión.
+
+   Para Codex, `.codex/config.toml` define el perfil `github-net` y lo activa con `default_permissions`. Según la [documentación de permisos de Codex](https://learn.chatgpt.com/docs/permissions.md), un perfil puede extender otro con `extends`, y si `sandbox_mode` aparece en una configuración cargada, Codex usa los ajustes antiguos en vez del perfil. La documentación no dice qué lee `:workspace` ni si equivale a `workspace-write`: la comparación lo comprueba.
+
+   Marca el proyecto como de confianza y abre dos sesiones nuevas de Codex, una sin perfil y otra con él. Haz las mismas nueve pruebas en las dos:
+
+   - **Sin perfil:** otro `CODEX_HOME` no quita el perfil, porque con el proyecto de confianza Codex carga el `.codex/config.toml` del repositorio. Copia el repositorio a un directorio temporal fuera de la carpeta del proyecto y sustituye en la copia `.codex/config.toml` por la versión de `staging` (`git show staging:.codex/config.toml > RUTA_COPIA/.codex/config.toml`). Marca la copia como proyecto de confianza en un `CODEX_HOME` temporal y abre Codex ahí. No edites el fichero versionado.
+   - **Con perfil:** abre Codex en el repositorio tal cual, con su `.codex/config.toml`.
+
+   | Prueba | Escribe | Tiene que pasar |
+   |---|---|---|
+   | 1. Crear en el repo | `touch prueba-sandbox.txt` | Mismo código de salida con y sin perfil. Borra el fichero después. |
+   | 2. Escribir fuera del repo | `touch ../prueba-sandbox.txt` | Mismo código de salida con y sin perfil. |
+   | 3. Leer la config personal | `head -c 1 ~/.codex/config.toml > /dev/null` | Mismo código de salida con y sin perfil. El comando no muestra tu configuración. |
+   | 4. Listar el directorio personal | `ls ~` | Mismo código de salida con y sin perfil. |
+   | 5. `gh` en el `PATH` | `echo $PATH` y `command -v gh` | `gh` aparece en el `PATH` con perfil. |
+   | 6. GitHub responde | `curl -sS -m 10 https://api.github.com/zen` | Con perfil, responde con una frase. |
+   | 7. Dominio fuera de la lista | `curl -sS -m 10 https://example.com` | Con perfil, el sandbox bloquea la conexión. |
+   | 8. Sesión de `gh` | `gh auth status` | Con perfil, `gh` llega a GitHub y no falla por la red. |
+   | 9. `check-status` | `bash .claude/skills/check-status/scripts/check-status.sh` | Con perfil, la línea `GitHub CLI` dice `cuenta TU_LOGIN`. |
+
+   La prueba pasa si las pruebas 1 a 4 dan los mismos códigos en las dos sesiones, `gh` está en el `PATH` (prueba 5), GitHub responde (pruebas 6, 8 y 9) y `example.com` queda bloqueado (prueba 7). La prueba falla en estos casos:
+
+   - Hay una diferencia en ficheros o en el `PATH` entre las dos sesiones.
+   - Al arrancar con el perfil aparece «default_permissions requires a [permissions] table». Codex ignora el perfil.
+
+   Haz dos comprobaciones más:
+
+   - **`sandbox_mode` personal:** repite las nueve pruebas con perfil. Añade `sandbox_mode = "workspace-write"` a tu `~/.codex/config.toml` y anota si el perfil sigue aplicándose: `api.github.com` responde y `example.com` queda bloqueado. Si Codex ignora `default_permissions` por `sandbox_mode`, la prueba falla. Quita la línea al terminar.
+   - **Proyecto sin confianza:** abre Codex con el proyecto sin marcar como de confianza. Comprueba que avisa de que ignora la configuración del proyecto y que `curl -sS -m 10 https://api.github.com/zen` no pasa por el perfil. Anota el texto del aviso en la issue. El aviso sale de la observación de una prueba, no de la documentación: la documentación dice solo que Codex carga la configuración del proyecto cuando el proyecto es de confianza. Es el comportamiento esperado, no un fallo del perfil.
+
+   Si algo falla en Codex, anota en la issue la herramienta, su versión (`codex --version`), la prueba y el mensaje de error. Si una herramienta no se puede probar, anótalo en la issue y no la des por probada.
+
 6. Anota lo que falle: la herramienta, el paso, lo que escribiste y el error. Ábrelo como issue en [este repositorio](https://github.com/venturars/delivery-workflow/issues) con el tipo `fix`.
 
 7. Borra el repositorio de prueba: `gh auth refresh -s delete_repo` y después `gh repo delete delivery-test --yes`.
@@ -100,21 +148,15 @@ La skill `setup-compliance` lleva en `assets/reglamento-ia/` el texto oficial en
 
 Los cambios entran en `staging` por pull request desde su rama de trabajo. Para publicar:
 
-1. Fusiona los cambios de desarrollo en `staging`. No hace falta subir `version` a mano: `release.yml` calcula el siguiente `major`, `minor` o `patch` a partir de los commits desde la última etiqueta estable cuando recibe el push a `main`.
-2. Quien mantiene el paquete abre la pull request de `staging` a `main`. GitHub no inicia `release.yml` en respuesta a una PR creada con `GITHUB_TOKEN`; no cuentes con una ejecución de validación mientras la PR está abierta. En una PR desde un fork, si el workflow se ejecuta y `version` en `apm.yml` no coincide con la calculada, la persona autora debe fijarla manualmente a la versión calculada.
-3. Al hacer merge, el push a `main` dispara `release.yml`. Ese workflow calcula y valida la versión en el push; si hace falta, la fija en un commit `chore: release X.Y.Z`. En ese mismo commit quita `dependencies.apm` de este repositorio, si está, para que la etiqueta no pida otro commit del mismo paquete. Después continúa con la publicación en la misma ejecución. Si la versión no supera la última estable o la etiqueta ya existe, termina sin crear la etiqueta ni la release. Si la validación pasa, crea la etiqueta `vX.Y.Z` y la release. No hace falta etiquetar a mano.
+1. Fusiona los cambios de desarrollo en `staging`.
+2. Quien mantiene el paquete abre la pull request de `staging` a `main` y la fusiona.
+3. El push a `main` dispara `release-create-version.yml` («Release: create version»). El workflow busca la última etiqueta `vX.Y.Z`, reúne los commits y los ficheros cambiados desde ella y se los envía a la IA de Groq. La IA decide si el cambio es `major`, `minor` o `patch` y escribe el resumen. El workflow calcula la versión nueva, crea la etiqueta y la release con ese resumen y la lista de PR. No hace falta etiquetar a mano. Si el commit ya tiene etiqueta, no crea otra.
 
-Para ver qué versión saldría: `bash .github/scripts/release-version.sh`.
+El workflow necesita el secreto `GROQ_API_KEY` en el repositorio. Si falta, si la IA no responde o si su respuesta no es válida, el workflow falla y no crea etiqueta ni release.
 
-La versión siguiente se calcula desde los Conventional Commits posteriores a la
-última etiqueta estable. Aplica esta prioridad determinista: un `!` o
-`BREAKING CHANGE` produce `major`; si no existe ninguno, un `feat` produce
-`minor`; los demás cambios producen `patch`. Las reglas de los commits
-seleccionan el tipo y el número; una IA no interviene en el cálculo.
+El workflow no cambia `version` en `apm.yml` ni hace commits en `main`: la versión publicada es la etiqueta.
 
-Las releases estables usan etiquetas `vX.Y.Z` inmutables. Si `vX.Y.Z` ya
-existe o la versión calculada no supera la última etiqueta estable, el workflow
-termina sin mover, borrar ni recrear la etiqueta.
+Las releases estables usan etiquetas `vX.Y.Z`. Una IA decide el tipo de cambio, así que dos ejecuciones sobre los mismos commits pueden dar un resumen distinto.
 
 Los proyectos instalan desde la etiqueta, así que `staging` puede cambiar sin afectarles.
 
@@ -122,4 +164,4 @@ Los proyectos instalan desde la etiqueta, así que `staging` puede cambiar sin a
 
 El workflow `APM: update dependency` solo corre en este repositorio. Hace checkout de `staging` y abre la pull request contra esa rama. La instalación de APM y `apm update` usan el token de Actions (`GITHUB_TOKEN`), para no pedir los metadatos de release de forma anónima. El instalador no añade su directorio al PATH cuando detecta CI; el paso lo publica en `GITHUB_PATH`. Cada día a las 08:17 UTC, y también a mano, elige la release estable más alta de `venturars/delivery-workflow` cuyo `apm.yml` no depende de este repositorio. Las etiquetas que sí dependen, como `v1.1.3` y `v1.1.4`, se saltan: APM no instala dos commits del mismo paquete. Si el manifiesto ya apunta a la elegida, no ejecuta `apm update`. Si apunta a una anterior, o el commit de release quitó `dependencies.apm`, escribe esa entrada con la referencia nueva y ejecuta `apm update --force` para `claude`, `cursor` y `codex`. `--force` hace falta porque el runner no guarda recibos de despliegue y el paquete local (`.apm/`) publica los mismos ficheros que la dependencia: sin esa opción, APM 0.38 rechaza la escritura con `no trustworthy local deployment baseline` y no mueve el lock. La pull request se abre en draft, queda en la rama `chore/update-delivery-workflow` e incluye `apm.yml`, `apm.lock.yaml` y los archivos generados por APM.
 
-No es un workflow reutilizable: otro repositorio no puede llamarlo. Tampoco se engancha al evento `release`, porque esa release la crea `GITHUB_TOKEN` y GitHub no arrancaría el workflow. La pull request la abre el mismo token, así que no dispara `review`.
+No es un workflow reutilizable: otro repositorio no puede llamarlo. Tampoco se engancha al evento `release`, porque esa release la crea `GITHUB_TOKEN` y GitHub no arrancaría el workflow. La pull request la abre el mismo token, así que no dispara `PR: check rules`.
